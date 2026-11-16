@@ -7,8 +7,10 @@ import respx
 
 from app.config import Settings
 from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError
+from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.gist import GistPlatform
 from app.platforms.mastodon import MastodonPlatform
+from app.validation import validate_message
 from conftest import PAYLOAD
 
 GIST_API = "https://api.github.com/gists"
@@ -87,3 +89,36 @@ async def test_mastodon(platform_client: httpx.AsyncClient, no_external_http: re
     request = route.calls.last.request
     assert request.headers["Authorization"] == f"Bearer {credential}"
     assert json.loads(request.content) == {"status": PAYLOAD.text, "visibility": "public"}
+
+
+async def test_bluesky(platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter) -> None:
+    handle = "author.bsky.social"
+    credential = "fake-bluesky-value"
+    session_jwt = "mock-session"
+    xrpc = "https://bsky.social/xrpc"
+    session = no_external_http.post(f"{xrpc}/com.atproto.server.createSession").respond(
+        200, json={"accessJwt": session_jwt, "did": "did:plc:demo", "handle": handle}
+    )
+    record = no_external_http.post(f"{xrpc}/com.atproto.repo.createRecord").respond(
+        200, json={"uri": "at://did:plc:demo/app.bsky.feed.post/rkey"}
+    )
+    settings = Settings(_env_file=None, bluesky_handle=handle, bluesky_app_password=credential)
+    payload = validate_message("🚀 Read (https://example.com).")
+    result = await BlueskyPlatform(platform_client, settings).post(payload)
+
+    assert result.url == f"https://bsky.app/profile/{handle}/post/rkey"
+    assert json.loads(session.calls.last.request.content) == {
+        "identifier": handle, "password": credential
+    }
+    request = record.calls.last.request
+    assert request.headers["Authorization"] == f"Bearer {session_jwt}"
+    content = json.loads(request.content)
+    assert content["repo"] == "did:plc:demo"
+    assert content["collection"] == content["record"]["$type"] == "app.bsky.feed.post"
+    assert content["record"]["text"] == payload.text
+    assert content["record"]["createdAt"].endswith("Z")
+    assert content["record"]["facets"] == [{
+        "index": {"byteStart": 11, "byteEnd": 30},
+        "features": [{"$type": "app.bsky.richtext.facet#link", "uri": payload.link}],
+    }]
+    assert payload.text.encode("utf-8")[11:30] == payload.link.encode("utf-8")

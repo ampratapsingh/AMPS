@@ -58,3 +58,10 @@ def validate_message(message: str) -> PostPayload:
     if len(candidates) != 1:
         raise ValueError(f"message must contain exactly one link (found {len(candidates)})")
     return PostPayload(text=text, link=validate_link(candidates[0]))
+
+
+def split_link(payload: PostPayload) -> tuple[str, str]:
+    """Return the text on either side of the already validated CTA."""
+    match = re.search(r"\b" + re.escape(payload.link), payload.text)
+    assert match is not None  # validate_message extracted the CTA at a word boundary.
+    return payload.text[:match.start()], payload.text[match.end():]
