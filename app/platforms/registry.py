@@ -10,6 +10,7 @@ from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform
 from app.platforms.telegram import TelegramPlatform
 from app.platforms.telegraph import TelegraphPlatform
+from app.platforms.discord import DiscordPlatform
 
 PLATFORM_ORDER = ("bluesky", "mastodon", "devto", "gist", "telegram", "telegraph", "discord")
 ADAPTERS: dict[str, type[BasePlatform]] = {
@@ -19,6 +20,7 @@ ADAPTERS: dict[str, type[BasePlatform]] = {
     "devto": DevToPlatform,
     "telegram": TelegramPlatform,
     "telegraph": TelegraphPlatform,
+    "discord": DiscordPlatform,
 }
 
 

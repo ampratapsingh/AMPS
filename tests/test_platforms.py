@@ -11,6 +11,7 @@ from app.config import Settings
 from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError, PlatformError
 from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform, make_title
+from app.platforms.discord import DiscordPlatform
 from app.platforms.gist import GistPlatform
 from app.platforms.mastodon import MastodonPlatform
 from app.platforms.telegram import TelegramPlatform
@@ -290,3 +291,22 @@ async def test_telegraph_redacts_generated_credential(
     settings = Settings(_env_file=None, telegraph_access_token=None)
     with pytest.raises(PlatformError, match=r"Invalid access for \*\*\*"):
         await TelegraphPlatform(platform_client, settings).post(PAYLOAD)
+
+
+async def test_discord(platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter) -> None:
+    webhook = "https://discord.com/api/webhooks/123/demo-webhook-value"
+    route = no_external_http.post(f"{webhook}?thread_id=321&wait=true").respond(
+        200, json={"id": "789", "channel_id": "456"}
+    )
+    settings = Settings(
+        _env_file=None, discord_webhook_url=f"{webhook}?thread_id=321", discord_guild_id="111"
+    )
+    platform = DiscordPlatform(platform_client, settings)
+    result = await platform.post(PAYLOAD)
+
+    assert result.url == "https://discord.com/channels/111/456/789"
+    request = route.calls.last.request
+    assert request.url.params["wait"] == "true"
+    assert request.url.params["thread_id"] == "321"
+    assert json.loads(request.content) == {"content": PAYLOAD.text}
+    assert await platform.verify_public(result.url) is False
