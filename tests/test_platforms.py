@@ -8,6 +8,7 @@ import respx
 from app.config import Settings
 from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError
 from app.platforms.bluesky import BlueskyPlatform
+from app.platforms.devto import DevToPlatform, make_title
 from app.platforms.gist import GistPlatform
 from app.platforms.mastodon import MastodonPlatform
 from app.validation import validate_message
@@ -122,3 +123,43 @@ async def test_bluesky(platform_client: httpx.AsyncClient, no_external_http: res
         "features": [{"$type": "app.bsky.richtext.facet#link", "uri": payload.link}],
     }]
     assert payload.text.encode("utf-8")[11:30] == payload.link.encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("text", "title"),
+    [
+        ("https://example.com", "Shared link"),
+        ("Read   https://example.com  this now", "Read this now"),
+        ("one two three four five six seven eight nine https://example.com",
+         "one two three four five six seven eight"),
+        (f"{'a' * 78} bb https://example.com", "a" * 78),
+    ],
+)
+def test_make_title(text: str, title: str) -> None:
+    assert make_title(validate_message(text)) == title
+
+
+async def test_devto(platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter) -> None:
+    url = "https://dev.to/author/read-this-123"
+    route = no_external_http.post("https://dev.to/api/articles").respond(201, json={"url": url})
+    credential = "fake-forem-value"
+    settings = Settings(_env_file=None, devto_api_key=credential)
+    result = await DevToPlatform(platform_client, settings).post(PAYLOAD)
+
+    assert result.url == url
+    request = route.calls.last.request
+    assert request.headers["api-key"] == credential
+    assert request.headers["Accept"] == "application/vnd.forem.api-v1+json"
+    assert request.headers["Content-Type"] == "application/json"
+    assert json.loads(request.content) == {
+        "article": {"title": "Read this", "body_markdown": PAYLOAD.text, "published": True}
+    }
+
+
+async def test_devto_validation_error(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    no_external_http.post("https://dev.to/api/articles").respond(422, json={"error": "Duplicate article"})
+    settings = Settings(_env_file=None, devto_api_key="fake-forem-value")
+    with pytest.raises(PlatformAPIError, match="Duplicate article"):
+        await DevToPlatform(platform_client, settings).post(PAYLOAD)
