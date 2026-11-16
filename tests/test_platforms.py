@@ -11,6 +11,7 @@ from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform, make_title
 from app.platforms.gist import GistPlatform
 from app.platforms.mastodon import MastodonPlatform
+from app.platforms.telegram import TelegramPlatform
 from app.validation import validate_message
 from conftest import PAYLOAD
 
@@ -163,3 +164,59 @@ async def test_devto_validation_error(
     settings = Settings(_env_file=None, devto_api_key="fake-forem-value")
     with pytest.raises(PlatformAPIError, match="Duplicate article"):
         await DevToPlatform(platform_client, settings).post(PAYLOAD)
+
+
+TELEGRAM_TEST_CREDENTIAL = "12345:fake-bot-credential"
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TEST_CREDENTIAL}/sendMessage"
+
+
+@pytest.mark.parametrize("channel", ["@updates", "updates"])
+async def test_telegram(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter, channel: str
+) -> None:
+    route = no_external_http.post(TELEGRAM_API).respond(
+        200, json={"ok": True, "result": {"message_id": 123}}
+    )
+    settings = Settings(
+        _env_file=None, telegram_bot_token=TELEGRAM_TEST_CREDENTIAL, telegram_channel=channel
+    )
+    result = await TelegramPlatform(platform_client, settings).post(PAYLOAD)
+
+    assert result.url == "https://t.me/updates/123"
+    assert json.loads(route.calls.last.request.content) == {
+        "chat_id": "@updates",
+        "text": PAYLOAD.text,
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "error_type", "message"),
+    [
+        (401, 401, PlatformAuthError, "Authentication failed"),
+        (200, 429, PlatformRateLimitError, "Rate limited, retry after 12s"),
+        (400, 400, PlatformAPIError, "Platform API error (HTTP 400): Error for ***"),
+    ],
+)
+async def test_telegram_errors(
+    platform_client: httpx.AsyncClient,
+    no_external_http: respx.MockRouter,
+    status: int,
+    code: int,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    no_external_http.post(TELEGRAM_API).respond(
+        status,
+        json={
+            "ok": False,
+            "error_code": code,
+            "description": f"Error for {TELEGRAM_TEST_CREDENTIAL}",
+            "parameters": {"retry_after": 12},
+        },
+    )
+    settings = Settings(
+        _env_file=None, telegram_bot_token=TELEGRAM_TEST_CREDENTIAL, telegram_channel="updates"
+    )
+    with pytest.raises(error_type) as error:
+        await TelegramPlatform(platform_client, settings).post(PAYLOAD)
+    assert str(error.value) == message
