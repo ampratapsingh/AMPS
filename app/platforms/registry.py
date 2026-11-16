@@ -4,9 +4,12 @@ import httpx
 
 from app.config import Settings
 from app.platforms.base import BasePlatform
+from app.platforms.gist import GistPlatform
 
 PLATFORM_ORDER = ("bluesky", "mastodon", "devto", "gist", "telegram", "telegraph", "discord")
-ADAPTERS: dict[str, type[BasePlatform]] = {}
+ADAPTERS: dict[str, type[BasePlatform]] = {
+    "gist": GistPlatform,
+}
 
 
 def build_platforms(settings: Settings, client: httpx.AsyncClient) -> list[BasePlatform]:
