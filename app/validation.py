@@ -33,7 +33,7 @@ def validate_link(candidate: str) -> str:
         parts = urlsplit(link)
         hostname = parts.hostname or ""
         # Reading the port makes urlsplit check its syntax and range.
-        port = parts.port
+        _ = parts.port
     except ValueError:
         raise ValueError("link is not a valid URL") from None
 

@@ -1,9 +1,6 @@
 import httpx
 import pytest
-from fastapi import FastAPI
 
-from app.main import validation_error_handler
-from app.schemas import PostRequest
 from app.validation import PostPayload, validate_message
 
 
@@ -56,22 +53,12 @@ def test_trailing_punctuation(suffix: str) -> None:
         ("not JSON", "body", "body must be valid JSON"),
     ],
 )
-async def test_validation_error_shape(body: str, field: str, message: str) -> None:
-    from fastapi.exceptions import RequestValidationError
-
-    app = FastAPI()
-    app.add_exception_handler(RequestValidationError, validation_error_handler)
-
-    @app.post("/posting")
-    async def posting(post: PostRequest) -> str:
-        return post.message.text
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post(
-            "/posting", content=body, headers={"Content-Type": "application/json"}
-        )
+async def test_validation_error_shape(
+    api_client: httpx.AsyncClient, body: str, field: str, message: str
+) -> None:
+    response = await api_client.post(
+        "/posting", content=body, headers={"Content-Type": "application/json"}
+    )
 
     assert response.status_code == 422
     assert response.json() == {
