@@ -1,17 +1,20 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
 import respx
 
 from app.config import Settings
-from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError
+from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError, PlatformError
 from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform, make_title
 from app.platforms.gist import GistPlatform
 from app.platforms.mastodon import MastodonPlatform
 from app.platforms.telegram import TelegramPlatform
+from app.platforms.telegraph import TelegraphPlatform
 from app.validation import validate_message
 from conftest import PAYLOAD
 
@@ -220,3 +223,70 @@ async def test_telegram_errors(
     with pytest.raises(error_type) as error:
         await TelegramPlatform(platform_client, settings).post(PAYLOAD)
     assert str(error.value) == message
+
+
+TELEGRAPH_TEST_CREDENTIAL = "fake-telegraph-value"
+TELEGRAPH_ACCOUNT = "https://api.telegra.ph/createAccount"
+TELEGRAPH_PAGE = "https://api.telegra.ph/createPage"
+TELEGRAPH_URL = "https://telegra.ph/Read-this-11-16"
+
+
+async def test_telegraph_reuses_configured_account(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    page = no_external_http.post(TELEGRAPH_PAGE).respond(
+        200, json={"ok": True, "result": {"url": TELEGRAPH_URL}}
+    )
+    settings = Settings(_env_file=None, telegraph_access_token=TELEGRAPH_TEST_CREDENTIAL)
+    payload = validate_message("Read https://example.com today")
+    result = await TelegraphPlatform(platform_client, settings).post(payload)
+
+    assert result.url == TELEGRAPH_URL
+    form = parse_qs(page.calls.last.request.content.decode())
+    assert form["access_token"] == [TELEGRAPH_TEST_CREDENTIAL]
+    assert form["title"] == ["Read today"]
+    assert form["return_content"] == ["false"]
+    assert json.loads(form["content"][0]) == [
+        {"tag": "p", "children": [
+            "Read ",
+            {"tag": "a", "attrs": {"href": payload.link}, "children": [payload.link]},
+            " today",
+        ]}
+    ]
+
+
+async def test_telegraph_creates_one_account_for_concurrent_posts(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    async def create_account(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        assert parse_qs(request.content.decode()) == {"short_name": ["poster"]}
+        return httpx.Response(200, json={
+            "ok": True, "result": {"access_token": TELEGRAPH_TEST_CREDENTIAL}
+        })
+
+    account = no_external_http.post(TELEGRAPH_ACCOUNT).mock(side_effect=create_account)
+    page = no_external_http.post(TELEGRAPH_PAGE).respond(
+        200, json={"ok": True, "result": {"url": TELEGRAPH_URL}}
+    )
+    settings = Settings(_env_file=None, telegraph_access_token=None)
+    platform = TelegraphPlatform(platform_client, settings)
+    results = await asyncio.gather(platform.post(PAYLOAD), platform.post(PAYLOAD))
+
+    assert [result.url for result in results] == [TELEGRAPH_URL, TELEGRAPH_URL]
+    assert account.call_count == 1
+    assert page.call_count == 2
+
+
+async def test_telegraph_redacts_generated_credential(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    no_external_http.post(TELEGRAPH_ACCOUNT).respond(
+        200, json={"ok": True, "result": {"access_token": TELEGRAPH_TEST_CREDENTIAL}}
+    )
+    no_external_http.post(TELEGRAPH_PAGE).respond(
+        200, json={"ok": False, "error": f"Invalid access for {TELEGRAPH_TEST_CREDENTIAL}"}
+    )
+    settings = Settings(_env_file=None, telegraph_access_token=None)
+    with pytest.raises(PlatformError, match=r"Invalid access for \*\*\*"):
+        await TelegraphPlatform(platform_client, settings).post(PAYLOAD)
