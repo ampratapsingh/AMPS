@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
 
@@ -23,7 +24,7 @@ class FakePlatform(BasePlatform):
         delay: float = 0,
         public: bool = True,
     ) -> None:
-        self.settings = Settings(_env_file=None)
+        self.settings = Settings.model_construct()
         self.completed = asyncio.Event()
         self.name = name
         self.error = error
@@ -61,3 +62,11 @@ async def api_client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[httpx.Asy
             transport=httpx.ASGITransport(app=main.app), base_url="http://test"
         ) as client:
             yield client
+
+
+@pytest.fixture(autouse=True)
+def clear_platform_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test with fake credentials even when the developer has a live environment."""
+    for key in list(os.environ):
+        if key.lower() in Settings.model_fields:
+            monkeypatch.delenv(key)

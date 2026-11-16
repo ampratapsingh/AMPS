@@ -2,14 +2,47 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
 from app.validation import PostPayload, validate_message
 
 
+_SUCCESS_RESULT = {
+    "platform": "GitHub Gist",
+    "status": "success",
+    "posted_url": "https://gist.github.com/author/abc123",
+    "public_access": True,
+    "date": "2026-11-16",
+    "time": "10:30:00",
+    "error": None,
+}
+POST_SUCCESS_EXAMPLE = {"success": True, "results": [_SUCCESS_RESULT]}
+POST_PARTIAL_EXAMPLE = {
+    "success": True,
+    "results": [
+        _SUCCESS_RESULT,
+        {
+            "platform": "Telegram",
+            "status": "failed",
+            "posted_url": None,
+            "public_access": False,
+            "date": None,
+            "time": None,
+            "error": "Authentication failed",
+        },
+    ],
+}
+
+
 class PostRequest(BaseModel):
     """A message with one CTA link."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [{"message": "Check out our latest business platform. https://example.com"}]
+        }
+    )
 
     message: PostPayload
 
@@ -40,6 +73,10 @@ class PostResult(BaseModel):
 class PostResponse(BaseModel):
     """Results in platform registry order."""
 
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [POST_SUCCESS_EXAMPLE, POST_PARTIAL_EXAMPLE]}
+    )
+
     success: bool
     results: list[PostResult]
 
@@ -53,6 +90,23 @@ class ValidationDetail(BaseModel):
 
 class ValidationResponse(BaseModel):
     """The response sent for invalid requests."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "success": False,
+                    "error": "validation_error",
+                    "details": [
+                        {
+                            "field": "message",
+                            "message": "message must contain exactly one link (found 2)",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
 
     success: Literal[False] = False
     error: Literal["validation_error"] = "validation_error"

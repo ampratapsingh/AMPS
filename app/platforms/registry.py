@@ -4,20 +4,19 @@ import httpx
 
 from app.config import Settings
 from app.platforms.base import BasePlatform
-from app.platforms.gist import GistPlatform
-from app.platforms.mastodon import MastodonPlatform
 from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform
+from app.platforms.discord import DiscordPlatform
+from app.platforms.gist import GistPlatform
+from app.platforms.mastodon import MastodonPlatform
 from app.platforms.telegram import TelegramPlatform
 from app.platforms.telegraph import TelegraphPlatform
-from app.platforms.discord import DiscordPlatform
 
-PLATFORM_ORDER = ("bluesky", "mastodon", "devto", "gist", "telegram", "telegraph", "discord")
 ADAPTERS: dict[str, type[BasePlatform]] = {
-    "gist": GistPlatform,
-    "mastodon": MastodonPlatform,
     "bluesky": BlueskyPlatform,
+    "mastodon": MastodonPlatform,
     "devto": DevToPlatform,
+    "gist": GistPlatform,
     "telegram": TelegramPlatform,
     "telegraph": TelegraphPlatform,
     "discord": DiscordPlatform,
@@ -29,7 +28,7 @@ def build_platforms(settings: Settings, client: httpx.AsyncClient) -> list[BaseP
     enabled = {
         key.strip().lower() for key in settings.enabled_platforms.split(",") if key.strip()
     }
-    unknown = enabled.difference(PLATFORM_ORDER)
+    unknown = enabled.difference(ADAPTERS)
     if unknown:
         raise ValueError(f"Unknown ENABLED_PLATFORMS keys: {', '.join(sorted(unknown))}")
-    return [ADAPTERS[key](client, settings) for key in PLATFORM_ORDER if key in enabled and key in ADAPTERS]
+    return [adapter(client, settings) for key, adapter in ADAPTERS.items() if key in enabled]

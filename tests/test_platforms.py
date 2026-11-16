@@ -8,7 +8,13 @@ import pytest
 import respx
 
 from app.config import Settings
-from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError, PlatformError
+from app.exceptions import (
+    PlatformAPIError,
+    PlatformAuthError,
+    PlatformConfigError,
+    PlatformError,
+    PlatformRateLimitError,
+)
 from app.platforms.bluesky import BlueskyPlatform
 from app.platforms.devto import DevToPlatform, make_title
 from app.platforms.discord import DiscordPlatform
@@ -310,3 +316,23 @@ async def test_discord(platform_client: httpx.AsyncClient, no_external_http: res
     assert request.url.params["thread_id"] == "321"
     assert json.loads(request.content) == {"content": PAYLOAD.text}
     assert await platform.verify_public(result.url) is False
+
+
+async def test_public_probe_retries_once_after_non_success(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    page = no_external_http.get(GIST_URL).mock(
+        side_effect=[httpx.Response(404), httpx.Response(200)]
+    )
+    platform = GistPlatform(platform_client, Settings(_env_file=None))
+    assert await platform.verify_public(GIST_URL) is True
+    assert page.call_count == 2
+
+
+async def test_public_probe_returns_false_on_network_error(
+    platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter
+) -> None:
+    page = no_external_http.get(GIST_URL).mock(side_effect=httpx.ConnectError("offline"))
+    platform = GistPlatform(platform_client, Settings(_env_file=None))
+    assert await platform.verify_public(GIST_URL) is False
+    assert page.call_count == 1

@@ -1,7 +1,11 @@
 """FastAPI application, dependencies and request handling."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from http.cookiejar import Cookie, CookieJar, DefaultCookiePolicy
+from typing import Annotated
+from urllib.request import Request as URLRequest
 
 import httpx
 from fastapi import Depends, FastAPI, Request
@@ -10,22 +14,41 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.platforms.registry import build_platforms
-from app.schemas import PostRequest, PostResponse, ValidationDetail, ValidationResponse
+from app.schemas import (
+    POST_PARTIAL_EXAMPLE,
+    POST_SUCCESS_EXAMPLE,
+    PostRequest,
+    PostResponse,
+    ValidationDetail,
+    ValidationResponse,
+)
 from app.services.posting_service import PostingService
+
+
+class IgnoreCookies(DefaultCookiePolicy):
+    """Keep anonymous probes independent of cookies set by earlier requests."""
+
+    def set_ok(self, cookie: Cookie, request: URLRequest) -> bool:
+        return False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Share a single HTTP client and adapter registry across requests."""
+    logging.basicConfig(level=logging.INFO)
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+
     settings = get_settings()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+    cookies = CookieJar(policy=IgnoreCookies())
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), cookies=cookies) as client:
         app.state.posting_service = PostingService(
             build_platforms(settings, client), settings.platform_timeout_seconds
         )
         yield
 
 
-def get_posting_service(request: Request) -> PostingService:
+async def get_posting_service(request: Request) -> PostingService:
     """Resolve the posting service from the application lifespan."""
     return request.app.state.posting_service
 
@@ -47,7 +70,9 @@ async def validation_error_handler(
     return JSONResponse(status_code=422, content=ValidationResponse(details=details).model_dump())
 
 
-async def posting(post: PostRequest, service: PostingService = Depends(get_posting_service)) -> PostResponse:
+async def posting(
+    post: PostRequest, service: Annotated[PostingService, Depends(get_posting_service)]
+) -> PostResponse:
     """Publish one validated message to the enabled platforms."""
     return await service.publish(post.message)
 
@@ -55,15 +80,40 @@ async def posting(post: PostRequest, service: PostingService = Depends(get_posti
 def create_app() -> FastAPI:
     """Build the application and register the posting endpoint."""
     app = FastAPI(
-        title="Automated Multi-Platform Posting System", lifespan=lifespan, redoc_url=None
+        title="Automated Multi-Platform Posting System",
+        lifespan=lifespan,
+        redoc_url=None,
+        swagger_ui_oauth2_redirect_url=None,
     )
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.post(
         "/posting",
         response_model=PostResponse,
-        responses={422: {"model": ValidationResponse}},
+        responses={
+            200: {
+                "content": {
+                    "application/json": {
+                        "examples": {
+                            "success": {
+                                "summary": "All platforms succeeded",
+                                "value": POST_SUCCESS_EXAMPLE,
+                            },
+                            "partial": {
+                                "summary": "One platform failed",
+                                "value": POST_PARTIAL_EXAMPLE,
+                            },
+                        }
+                    }
+                }
+            },
+            422: {"model": ValidationResponse},
+        },
         summary="Publish a message to multiple platforms",
-        description="Send a message with one HTTP(S) link and receive a result for each enabled platform.",
+        description=(
+            "Send up to 200 characters with exactly one HTTP(S) link. "
+            "Every valid request returns HTTP 200 with a result for each enabled platform, "
+            "and success is true when any platform publishes the message."
+        ),
     )(posting)
     return app
 

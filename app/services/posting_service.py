@@ -79,7 +79,9 @@ class PostingService:
         except Exception as exc:
             # Traceback frames help diagnose failures without logging the exception payload.
             frames = "".join(traceback.format_tb(exc.__traceback__))
-            logger.error("%s raised %s\n%s", platform.name, type(exc).__name__, frames)
+            logger.error(
+                "%s", redact(f"{platform.name} raised {type(exc).__name__}\n{frames}", platform.secrets())
+            )
             result = self._failed(platform, "Unexpected error")
 
         logger.info("%s %s %.1f ms", platform.name, result.status, (monotonic() - started) * 1000)
