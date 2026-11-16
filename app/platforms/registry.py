@@ -5,10 +5,12 @@ import httpx
 from app.config import Settings
 from app.platforms.base import BasePlatform
 from app.platforms.gist import GistPlatform
+from app.platforms.mastodon import MastodonPlatform
 
 PLATFORM_ORDER = ("bluesky", "mastodon", "devto", "gist", "telegram", "telegraph", "discord")
 ADAPTERS: dict[str, type[BasePlatform]] = {
     "gist": GistPlatform,
+    "mastodon": MastodonPlatform,
 }
 
 

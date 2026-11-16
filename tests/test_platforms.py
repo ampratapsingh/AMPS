@@ -8,6 +8,7 @@ import respx
 from app.config import Settings
 from app.exceptions import PlatformAPIError, PlatformAuthError, PlatformConfigError, PlatformRateLimitError
 from app.platforms.gist import GistPlatform
+from app.platforms.mastodon import MastodonPlatform
 from conftest import PAYLOAD
 
 GIST_API = "https://api.github.com/gists"
@@ -69,3 +70,20 @@ async def test_gist_missing_credentials(platform_client: httpx.AsyncClient) -> N
     settings = Settings(_env_file=None, github_token=None)
     with pytest.raises(PlatformConfigError, match="Credentials not configured: set GITHUB_TOKEN"):
         await GistPlatform(platform_client, settings).post(PAYLOAD)
+
+
+async def test_mastodon(platform_client: httpx.AsyncClient, no_external_http: respx.MockRouter) -> None:
+    url = "https://social.example/@author/123"
+    route = no_external_http.post("https://social.example/api/v1/statuses").respond(
+        200, json={"url": url}
+    )
+    credential = "fake-mastodon-value"
+    settings = Settings(
+        _env_file=None, mastodon_base_url="https://social.example/", mastodon_access_token=credential
+    )
+    result = await MastodonPlatform(platform_client, settings).post(PAYLOAD)
+
+    assert result.url == url
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == f"Bearer {credential}"
+    assert json.loads(request.content) == {"status": PAYLOAD.text, "visibility": "public"}
