@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.validation import PostPayload, validate_message
+from app.validation import PostPayload, find_links, split_link, validate_message
 
 
 def test_valid_message() -> None:
@@ -31,6 +31,11 @@ def test_character_limit() -> None:
         ("http://nodot", "link is not a valid URL"),
         ("https://-invalid.example", "link is not a valid URL"),
         ("https://example.com:99999", "link is not a valid URL"),
+        ("https://[v1.example]/path", "link is not a valid URL"),
+        ("https://[::1]example.com/path", "link is not a valid URL"),
+        ("https:///missing-host", "link is not a valid URL"),
+        ("https://256.0.0.1/path", "link is not a valid URL"),
+        (r"https://example.com\path", "link is not a valid URL"),
     ],
 )
 def test_invalid_message(message: str, reason: str) -> None:
@@ -43,6 +48,73 @@ def test_invalid_message(message: str, reason: str) -> None:
 def test_trailing_punctuation(suffix: str) -> None:
     text = f"Read (HTTPS://example.com{suffix}"
     assert validate_message(text) == PostPayload(text, "HTTPS://example.com")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://example.com:8443/path%20with%20spaces?q=a%2Bb&limit=2#section",
+        "https://例え.テスト/path",
+        "https://example.com./path",
+        "http://localhost:8000/path",
+        "http://192.0.2.1:8000/path",
+        "https://[2001:db8::1]:8443/path?q=value#section",
+        "http://[::]",
+    ],
+)
+def test_valid_url_formats(link: str) -> None:
+    text = f"Read this ({link})."
+    assert validate_message(text).link == link
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "https://example.com/a https://example.org/b",
+        "https://example.com/a,https://example.org/b",
+        "https://example.com/a;https://example.org/b",
+        "https://example.com/a!https://example.org/b",
+        "[First](https://example.com/a),[Second](https://example.org/b)",
+        "[First](https://example.com/a)[Second](https://example.org/b)",
+        "https://example.com/a,[Second](https://example.org/b)",
+        "[First](https://example.com/a),https://example.org/b",
+        "[First](<https://example.com/a>),[Second](<https://example.org/b>)",
+    ],
+)
+def test_multiple_ctas(message: str) -> None:
+    assert [link.rstrip(",;") for link in find_links(message)] == [
+        "https://example.com/a", "https://example.org/b"
+    ]
+    with pytest.raises(ValueError, match=r"message must contain exactly one link \(found 2\)"):
+        validate_message(message)
+
+
+@pytest.mark.parametrize(
+    ("message", "link"),
+    [
+        ("Read <https://example.com/a>", "https://example.com/a"),
+        ("[Read this](https://example.com/a)", "https://example.com/a"),
+        ("[Read this](<https://example.com/a>)", "https://example.com/a"),
+        ('[Read this](https://example.com/a "Title")', "https://example.com/a"),
+        ("[Read this](https://example.com/a_(b(c)))", "https://example.com/a_(b(c))"),
+        ("[Read this](http://[2001:db8::1])", "http://[2001:db8::1]"),
+        (
+            "Read https://example.com/a,b?redirect=https://example.org/path#section",
+            "https://example.com/a,b?redirect=https://example.org/path#section",
+        ),
+    ],
+)
+def test_extract_single_cta(message: str, link: str) -> None:
+    assert validate_message(message) == PostPayload(message, link)
+
+
+def test_markdown_destination_position_matches_the_clickable_url() -> None:
+    link = "https://example.com/a"
+    message = f'[{link}]({link} "see https://example.org")'
+    payload = validate_message(message)
+
+    assert payload.link == link
+    assert split_link(payload) == (f"[{link}](", ' "see https://example.org")')
 
 
 @pytest.mark.parametrize(

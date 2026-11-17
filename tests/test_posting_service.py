@@ -61,7 +61,8 @@ async def test_platform_failure_is_isolated(
         "error": error,
     }
     assert success.status == "success"
-    assert "private" not in caplog.text
+    assert "private adapter data" not in caplog.text
+    assert "private URL" not in caplog.text
     if error == "Unexpected error":
         assert "test_posting_service" in caplog.text or "conftest.py" in caplog.text
 

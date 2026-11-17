@@ -9,8 +9,10 @@ from urllib.request import Request as URLRequest
 
 import httpx
 from fastapi import Depends, FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from starlette.exceptions import HTTPException
 
 from app.config import get_settings
 from app.platforms.registry import build_platforms
@@ -53,6 +55,10 @@ async def get_posting_service(request: Request) -> PostingService:
     return request.app.state.posting_service
 
 
+def _validation_response(details: list[ValidationDetail]) -> JSONResponse:
+    return JSONResponse(status_code=422, content=ValidationResponse(details=details).model_dump())
+
+
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
@@ -67,7 +73,14 @@ async def validation_error_handler(
         else:
             detail = ValidationDetail(field="body", message="body must be a JSON object")
         details.append(detail)
-    return JSONResponse(status_code=422, content=ValidationResponse(details=details).model_dump())
+    return _validation_response(details)
+
+
+async def body_decoding_error_handler(request: Request, exc: HTTPException) -> Response:
+    """Use the validation envelope when FastAPI wraps a JSON decoding failure."""
+    if exc.status_code == 400 and isinstance(exc.__cause__, UnicodeDecodeError):
+        return _validation_response([ValidationDetail(field="body", message="body must be valid JSON")])
+    return await http_exception_handler(request, exc)
 
 
 async def posting(
@@ -86,6 +99,7 @@ def create_app() -> FastAPI:
         swagger_ui_oauth2_redirect_url=None,
     )
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(HTTPException, body_decoding_error_handler)
     app.post(
         "/posting",
         response_model=PostResponse,

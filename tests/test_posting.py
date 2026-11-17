@@ -5,6 +5,7 @@ import respx
 from app.exceptions import PlatformAuthError
 from app.main import app, get_posting_service
 from app.services.posting_service import PostingService
+from app.validation import PostPayload
 from conftest import NOW, PAYLOAD, FakePlatform
 
 
@@ -48,14 +49,22 @@ async def test_posting(
     assert all(platform.received == PAYLOAD for platform in platforms)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "https://a.com https://b.com",
+        "[First](https://example.com/a),[Second](https://example.org/b)",
+        "https://example.com/a,https://example.org/b",
+    ],
+)
 async def test_posting_validation_error(
-    api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, message: str
 ) -> None:
     platform = FakePlatform("test")
     monkeypatch.setitem(
         app.dependency_overrides, get_posting_service, lambda: PostingService([platform], 1)
     )
-    response = await api_client.post("/posting", json={"message": "https://a.com https://b.com"})
+    response = await api_client.post("/posting", json={"message": message})
     assert response.status_code == 422
     assert response.json() == {
         "success": False,
@@ -63,6 +72,52 @@ async def test_posting_validation_error(
         "details": [{"field": "message", "message": "message must contain exactly one link (found 2)"}],
     }
     assert platform.received is None
+
+
+@pytest.mark.parametrize(
+    ("raw_body", "field", "message"),
+    [
+        (b'{"message":"Read https://example.com \xff"}', "body", "body must be valid JSON"),
+        (b'{"message":"Read https://[v1.example]/path"}', "message", "link is not a valid URL"),
+    ],
+)
+async def test_invalid_requests_do_not_reach_adapters(
+    api_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_body: bytes,
+    field: str,
+    message: str,
+) -> None:
+    platform = FakePlatform("test")
+    monkeypatch.setitem(
+        app.dependency_overrides, get_posting_service, lambda: PostingService([platform], 1)
+    )
+    response = await api_client.post(
+        "/posting", content=raw_body, headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "success": False,
+        "error": "validation_error",
+        "details": [{"field": field, "message": message}],
+    }
+    assert platform.received is None
+
+
+async def test_ipv6_link_is_preserved_for_adapters(
+    api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = FakePlatform("test")
+    monkeypatch.setitem(
+        app.dependency_overrides, get_posting_service, lambda: PostingService([platform], 1)
+    )
+    text = "Read this (http://[2001:db8::1])."
+    response = await api_client.post("/posting", json={"message": text})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert platform.received == PostPayload(text=text, link="http://[2001:db8::1]")
 
 
 async def test_openapi_documents_the_contract(api_client: httpx.AsyncClient) -> None:
